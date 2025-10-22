@@ -90,7 +90,9 @@ jobs:
             echo "Downloading Skia..."
             mkdir "skia-%SKIA_VERSION%"
             cd "skia-%SKIA_VERSION%"
-            curl -sfLO https://github.com/aseprite/skia/releases/download/%SKIA_VERSION%/Skia-Windows-Release-x64.zip || echo "Failed to download Skia" && exit /b 1
+            
+            curl -sfLO "https://github.com/aseprite/skia/releases/download/%SKIA_VERSION%/Skia-Windows-Release-x64.zip" || echo "Failed to download Skia" && exit /b 1
+            
             "C:\Program Files\7-Zip\7z.exe" x -y Skia-Windows-Release-x64.zip || echo "Failed to extract Skia" && exit /b 1
             cd ..
           ) else (
@@ -99,7 +101,7 @@ jobs:
           
           rem Pass Skia version to next step
           echo "SKIA_VERSION=%SKIA_VERSION%" >> "%GITHUB_OUTPUT%"
-
+          
       # 7. Configure and run the build with CMake and Ninja
       - name: Build Aseprite
         shell: cmd
