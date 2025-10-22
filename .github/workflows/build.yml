@@ -48,10 +48,10 @@ jobs:
           
           rem Clean the repo and check out the specified tag
           call git clean --quiet -fdx
-          call git reset --hard %VERSION% || echo "Failed to reset to tag %VERSION%" && exit /b 1
+          call git reset --hard %VERSION% || (echo "Failed to reset to tag %VERSION%" & exit /b 1)
           
           rem Update submodules for that tag
-          call git submodule update --init --recursive || echo "Failed to update submodules" && exit /b 1
+          call git submodule update --init --recursive || (echo "Failed to update submodules" & exit /b 1)
           
           rem Pass the version to other steps
           echo "ASEPRITE_VERSION=%VERSION%" >> "%GITHUB_OUTPUT%"
@@ -66,42 +66,62 @@ jobs:
           (Get-Content -Path "src/ver/CMakeLists.txt") -replace '1.x-dev', $versionNum | Set-Content -Path "src/ver/CMakeLists.txt"
 
       # 6. Download the correct Skia library
+      # Changed to PowerShell to avoid cmd.exe parsing issues (unbalanced parentheses, variable-substitution quirks).
       - name: Install Skia
         id: skia
-        shell: cmd
+        shell: pwsh
         run: |
-          set "ASEPRITE_VERSION=${{ steps.version.outputs.ASEPRITE_VERSION }}"
+          $ASEPRITE_VERSION = "${{ steps.version.outputs.ASEPRITE_VERSION }}"
           
-          rem Check for skia-tag.txt
-          if exist "laf\misc\skia-tag.txt" (
-            set /p SKIA_VERSION=<laf\misc\skia-tag.txt
-          ) else (
-            rem Check if version contains 'beta'
-            if NOT "%ASEPRITE_VERSION:beta=%" == "%ASEPRITE_VERSION%" (
-              set "SKIA_VERSION=m124-08a5439a6b"
-            ) else (
-              set "SKIA_VERSION=m102-861e4743af"
-            )
-          )
-          
-          echo "Using Skia version: %SKIA_VERSION%"
-          
-          if not exist "skia-%SKIA_VERSION%" (
-            echo "Downloading Skia..."
-            mkdir "skia-%SKIA_VERSION%"
-            cd "skia-%SKIA_VERSION%"
+          # Prefer explicit skia-tag.txt when present
+          if (Test-Path "laf\misc\skia-tag.txt") {
+            $SKIA_VERSION = (Get-Content "laf\misc\skia-tag.txt" -Raw).Trim()
+          }
+          else {
+            if ($ASEPRITE_VERSION -and $ASEPRITE_VERSION -match "beta") {
+              $SKIA_VERSION = "m124-08a5439a6b"
+            }
+            else {
+              $SKIA_VERSION = "m102-861e4743af"
+            }
+          }
+
+          Write-Host "Using Skia version: $SKIA_VERSION"
+
+          $skiaDir = Join-Path $PWD "skia-$SKIA_VERSION"
+          if (-not (Test-Path $skiaDir)) {
+            Write-Host "Downloading Skia..."
+            New-Item -ItemType Directory -Path $skiaDir | Out-Null
+            Push-Location $skiaDir
+            try {
+              # Use Invoke-WebRequest, fall back to curl if needed
+              Invoke-WebRequest -Uri "https://github.com/aseprite/skia/releases/download/$SKIA_VERSION/Skia-Windows-Release-x64.zip" -OutFile "Skia-Windows-Release-x64.zip" -UseBasicParsing -ErrorAction Stop
+            } catch {
+              Write-Error "Failed to download Skia release: $_"
+              exit 1
+            }
             
-            curl -sfLO "https://github.com/aseprite/skia/releases/download/%SKIA_VERSION%/Skia-Windows-Release-x64.zip" || echo "Failed to download Skia" && exit /b 1
-            
-            "C:\Program Files\7-Zip\7z.exe" x -y Skia-Windows-Release-x64.zip || echo "Failed to extract Skia" && exit /b 1
-            cd ..
-          ) else (
-            echo "Skia version %SKIA_VERSION% already present."
-          )
-          
-          rem Pass Skia version to next step
-          echo "SKIA_VERSION=%SKIA_VERSION%" >> "%GITHUB_OUTPUT%"
-          
+            $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+            if (-not (Test-Path $sevenZip)) {
+              Write-Error "7-Zip not found at $sevenZip"
+              exit 1
+            }
+
+            & $sevenZip x -y "Skia-Windows-Release-x64.zip"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Failed to extract Skia archive"
+              exit 1
+            }
+
+            Pop-Location
+          }
+          else {
+            Write-Host "Skia version $SKIA_VERSION already present."
+          }
+
+          # Export the output for subsequent steps
+          "SKIA_VERSION=$SKIA_VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       # 7. Configure and run the build with CMake and Ninja
       - name: Build Aseprite
         shell: cmd
